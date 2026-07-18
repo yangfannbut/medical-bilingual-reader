@@ -1,0 +1,660 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>医学文献智能双语阅读器 (全方位可拖拽横纵分栏 + 核心功能修复)</title>
+    <!-- Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- PDF.js -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
+    <style>
+        .textLayer {
+            position: absolute; left: 0; top: 0; right: 0; bottom: 0;
+            overflow: hidden; opacity: 0.2; line-height: 1.0;
+        }
+        .textLayer span {
+            color: transparent; position: absolute; white-space: pre;
+            cursor: pointer; transform-origin: 0% 0%;
+        }
+        .textLayer span:hover { background-color: rgba(255, 225, 0, 0.5); }
+        .word-interactive:hover { background-color: #fef08a; border-radius: 2px; }
+        /* 拖拽分隔条样式 (支持横向和纵向) */
+        #resizer:hover, #resizer.resizing, .resizer-v:hover, .resizer-v.resizing {
+            background-color: #3b82f6 !important;
+        }
+    </style>
+</head>
+<body class="bg-slate-100 h-screen flex flex-col font-sans overflow-hidden">
+
+    <!-- 顶部导航栏 -->
+    <header class="bg-slate-800 text-white h-14 px-4 flex items-center justify-between shrink-0 shadow-md z-30">
+        <div class="flex items-center space-x-4">
+            <span class="font-bold text-lg tracking-wide">🩺 医学双语点读助手</span>
+            <label class="bg-blue-600 hover:bg-blue-500 text-white text-sm px-3 py-1.5 rounded cursor-pointer transition">
+                <span>📁 上传医学 PDF</span>
+                <input type="file" id="file-input" accept=".pdf" class="hidden">
+            </label>
+            <span id="file-name" class="text-xs text-slate-400 max-w-xs truncate">未选择文件（下方已展示测试样本）</span>
+        </div>
+
+        <div class="flex items-center space-x-4 text-sm">
+            <span class="text-xs text-amber-400 font-medium">💡 提示：拖拽面板间的灰色分隔条，可自由调节【左右宽度】与【上下高度】</span>
+            <div class="bg-slate-700 px-3 py-1 rounded flex items-center space-x-2">
+                <span class="text-xs text-slate-300">发音语速:</span>
+                <button id="speed-btn" class="bg-blue-500 hover:bg-blue-400 px-2 py-0.5 rounded text-xs font-semibold transition text-white">0.75x (慢速记忆)</button>
+            </div>
+            <div class="flex items-center space-x-2 bg-slate-700 px-3 py-1 rounded">
+                <button id="prev-page" class="hover:text-blue-400 disabled:opacity-50" disabled>◀ 上一页</button>
+                <span id="page-num" class="font-mono text-xs">1 / 1</span>
+                <button id="next-page" class="hover:text-blue-400 disabled:opacity-50" disabled>下一页 ▶</button>
+            </div>
+        </div>
+    </header>
+
+    <!-- 主交互区 (左右拖拽) -->
+    <main class="flex flex-1 overflow-hidden relative">
+        
+        <!-- 左侧：PDF 视觉区 -->
+        <div id="left-panel" class="bg-slate-200 overflow-auto flex justify-center p-6 border-r border-slate-300 relative shrink-0" style="width: 40%; min-width: 20%; max-width: 80%;">
+            <div id="empty-state" class="text-center my-auto text-slate-500 px-4">
+                <div class="text-5xl mb-4">📑</div>
+                <p class="text-base font-medium">请点击左上角上传医学文献 PDF</p>
+                <p class="text-xs text-slate-400 mt-2">电脑本地离线解析，保留完整排版与图表</p>
+                <p class="text-xs text-blue-600 mt-6 font-semibold">↑ 现在右侧已自动加载【演示测试文本】，可以直接调节体验 ↑</p>
+            </div>
+            <div id="pdf-container" class="relative shadow-2xl bg-white hidden">
+                <canvas id="pdf-canvas"></canvas>
+                <div id="text-layer" class="textLayer"></div>
+            </div>
+        </div>
+
+        <!-- 中间：水平拖拽控制条 (Resizer) -->
+        <div id="resizer" class="w-1.5 bg-slate-300 cursor-col-resize transition-colors shrink-0 z-20 flex items-center justify-center relative shadow-sm" title="左右拖动调整左右比例">
+            <div class="h-8 w-0.5 bg-slate-500 rounded"></div>
+        </div>
+
+        <!-- 右侧：双语对照、点读与生词本 (上下拖拽) -->
+        <div id="right-panel" class="bg-white flex flex-col h-full flex-1 overflow-hidden">
+            
+            <!-- 上部：本页段落对照 -->
+            <div id="right-top" class="flex flex-col overflow-hidden shrink-0" style="height: 40%; min-height: 15%;">
+                <div class="bg-slate-50 px-4 py-2 border-b flex justify-between items-center bg-slate-100 shrink-0">
+                    <span class="text-xs font-bold text-slate-600 uppercase tracking-wider">📖 当前页平行双语 (点击单词发音，点击句子翻译)</span>
+                    <span class="text-[10px] bg-green-100 text-green-800 px-2 py-0.5 rounded font-medium">免Key在线翻译中</span>
+                </div>
+                <div id="parallel-content" class="p-4 overflow-y-auto space-y-4 text-sm leading-relaxed flex-1"></div>
+            </div>
+
+            <!-- 垂直拖拽分隔条 1 -->
+            <div id="resizer-v1" class="resizer-v h-1.5 bg-slate-300 cursor-row-resize transition-colors shrink-0 z-20 flex items-center justify-center shadow-2xs" title="上下拖动调整阅读与查词比例">
+                <div class="w-8 h-0.5 bg-slate-500 rounded"></div>
+            </div>
+
+            <!-- 中部：单词解析、中英双释义与【词根拆解】 -->
+            <div id="right-mid" class="flex flex-col bg-slate-50 p-4 shrink-0 overflow-y-auto" style="height: 35%; min-height: 15%;">
+                <div class="text-xs font-bold text-slate-500 uppercase tracking-wider mb-2 flex justify-between shrink-0">
+                    <span>🔍 单词中英释义、发音与词根拆解</span>
+                    <span class="text-[10px] text-blue-600">三通道：谷歌中文 + 原版英英 + 拉丁/希腊词根</span>
+                </div>
+                <div id="word-panel" class="flex-1 flex flex-col justify-center items-center text-slate-400 border-2 border-dashed border-slate-200 rounded-lg p-3 bg-white min-h-[100px]">
+                    <span>点击左侧或上方任意英文单词，即可在此查看音标、双释义与词根拆解</span>
+                </div>
+            </div>
+
+            <!-- 垂直拖拽分隔条 2 -->
+            <div id="resizer-v2" class="resizer-v h-1.5 bg-slate-300 cursor-row-resize transition-colors shrink-0 z-20 flex items-center justify-center shadow-2xs" title="上下拖动调整查词与生词本比例">
+                <div class="w-8 h-0.5 bg-slate-500 rounded"></div>
+            </div>
+
+            <!-- 下部：发音记忆生词本 -->
+            <div id="right-bot" class="flex flex-col p-4 shrink-0 overflow-hidden bg-white flex-1" style="height: 25%; min-height: 15%;">
+                <div class="flex justify-between items-center mb-2 shrink-0">
+                    <span class="text-xs font-bold text-slate-500 uppercase tracking-wider">⭐ 我的发音生词本 (<span id="vocab-count">0</span>)</span>
+                    <button onclick="exportVocab()" class="text-[10px] bg-slate-100 hover:bg-slate-200 text-slate-600 px-2 py-1 rounded border shadow-2xs">导出复习 (Excel/Anki)</button>
+                </div>
+                <div id="vocab-list" class="space-y-1 overflow-y-auto flex-1"></div>
+            </div>
+
+        </div>
+    </main>
+
+    <script>
+        pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
+
+        let pdfDoc = null;
+        let pageNum = 1;
+        let scale = 1.5;
+        let isSlowSpeed = true;
+        let vocabList = JSON.parse(localStorage.getItem('medical_vocab') || '[]');
+        let currentSentences = [];
+
+        const sampleMedicalText = `Hypercholesterolemia is a major risk factor for the development of cardiovascular diseases, including myocardial infarction and atherosclerosis. 
+        Recent clinical trials have demonstrated that sublingual immunotherapy provides significant relief in patients with chronic allergic rhinitis. 
+        The pathophysiological mechanisms involve the activation of macrophages and the release of inflammatory cytokines such as interleukin-6.`;
+
+        const medicalRootsDB = [
+            { root: "hyper", meaning: "高/过多/超越", type: "前缀" },
+            { root: "hypo", meaning: "低/过少/下", type: "前缀" },
+            { root: "chole", meaning: "胆/胆汁", type: "词根" },
+            { root: "sterol", meaning: "固醇/甾醇", type: "词根" },
+            { root: "emia", meaning: "血症/血液状态", type: "后缀" },
+            { root: "cardio", meaning: "心脏", type: "词根" },
+            { root: "cardi", meaning: "心脏", type: "词根" },
+            { root: "vascul", meaning: "血管/微血管", type: "词根" },
+            { root: "vaso", meaning: "血管", type: "词根" },
+            { root: "myo", meaning: "肌肉/肌层", type: "词根" },
+            { root: "athero", meaning: "粉瘤/粥样斑块", type: "词根" },
+            { root: "sclerosis", meaning: "硬化/变硬", type: "词根/后缀" },
+            { root: "scler", meaning: "硬/硬化", type: "词根" },
+            { root: "sub", meaning: "下/次/低于", type: "前缀" },
+            { root: "lingu", meaning: "舌/语言", type: "词根" },
+            { root: "immuno", meaning: "免疫", type: "词根/前缀" },
+            { root: "therapy", meaning: "治疗/疗法", type: "词根/后缀" },
+            { root: "rhino", meaning: "鼻", type: "词根" },
+            { root: "rhin", meaning: "鼻", type: "词根" },
+            { root: "itis", meaning: "炎症", type: "后缀" },
+            { root: "patho", meaning: "疾病/病理", type: "词根/前缀" },
+            { root: "physio", meaning: "生理/自然机能", type: "词根" },
+            { root: "logical", meaning: "...学的/...逻辑的", type: "后缀" },
+            { root: "logy", meaning: "学说/科学研究", type: "后缀" },
+            { root: "macro", meaning: "大/巨大", type: "前缀" },
+            { root: "micro", meaning: "微小", type: "前缀" },
+            { root: "phage", meaning: "吞噬细胞/吃", type: "词根/后缀" },
+            { root: "phag", meaning: "吞噬/吃", type: "词根" },
+            { root: "cyto", meaning: "细胞", type: "词根/前缀" },
+            { root: "cyte", meaning: "细胞", type: "后缀" },
+            { root: "kine", meaning: "运动/动力", type: "词根" },
+            { root: "inter", meaning: "之间/相互", type: "前缀" },
+            { root: "leuk", meaning: "白/白色", type: "词根/前缀" },
+            { root: "erythro", meaning: "红/红色", type: "词根/前缀" },
+            { root: "neuro", meaning: "神经", type: "词根/前缀" },
+            { root: "osteo", meaning: "骨", type: "词根/前缀" },
+            { root: "gastro", meaning: "胃", type: "词根/前缀" },
+            { root: "entero", meaning: "肠", type: "词根" },
+            { root: "hepato", meaning: "肝", type: "词根/前缀" },
+            { root: "nephro", meaning: "肾", type: "词根/前缀" },
+            { root: "pneumo", meaning: "肺/空气", type: "词根/前缀" },
+            { root: "derma", meaning: "皮肤", type: "词根" },
+            { root: "hemat", meaning: "血", type: "词根" },
+            { root: "anti", meaning: "抗/反对/对抗", type: "前缀" },
+            { root: "poly", meaning: "多/复数", type: "前缀" },
+            { root: "mono", meaning: "单/单一", type: "前缀" },
+            { root: "intra", meaning: "内部/在内", type: "前缀" },
+            { root: "endo", meaning: "内/内部", type: "前缀" },
+            { root: "exo", meaning: "外/外部", type: "前缀" },
+            { root: "peri", meaning: "周围/环绕", type: "前缀" },
+            { root: "trans", meaning: "跨越/穿过", type: "前缀" },
+            { root: "retro", meaning: "向后/逆行", type: "前缀" },
+            { root: "tachy", meaning: "快/速", type: "前缀" },
+            { root: "brady", meaning: "慢/迟缓", type: "前缀" },
+            { root: "dys", meaning: "不良/困难/痛", type: "前缀" },
+            { root: "eu", meaning: "正常/优/良好", type: "前缀" },
+            { root: "osis", meaning: "病态/变异/状态", type: "后缀" },
+            { root: "oma", meaning: "肿瘤/肿块", type: "后缀" },
+            { root: "ectomy", meaning: "切除术", type: "后缀" },
+            { root: "plasty", meaning: "成形术/修复术", type: "后缀" },
+            { root: "tomy", meaning: "切开术", type: "后缀" },
+            { root: "scopy", meaning: "镜检/观察", type: "后缀" },
+            { root: "lysis", meaning: "溶解/分解/分离", type: "后缀" },
+            { root: "megaly", meaning: "巨大/肿大", type: "后缀" },
+            { root: "phobia", meaning: "恐惧症", type: "后缀" },
+            { root: "trophy", meaning: "营养/发育", type: "后缀" },
+            { root: "stasis", meaning: "停滞/静止", type: "后缀" },
+            { root: "genic", meaning: "致病的/产生的", type: "后缀" },
+            { root: "infarct", meaning: "梗死/填充", type: "词根" },
+            { root: "flamm", meaning: "燃烧/发炎", type: "词根" },
+            { root: "allerg", meaning: "过敏", type: "词根" }
+        ];
+
+        function analyzeMedicalRoots(word) {
+            const lower = word.toLowerCase();
+            let matches = [];
+            
+            medicalRootsDB.forEach(item => {
+                const r = item.root;
+                if (lower.includes(r)) {
+                    if (r.length <= 3) {
+                        if ((item.type.includes("前缀") && lower.startsWith(r)) || 
+                            (item.type.includes("后缀") && lower.endsWith(r)) ||
+                            (!item.type.includes("前缀") && !item.type.includes("后缀"))) {
+                            matches.push(item);
+                        }
+                    } else {
+                        matches.push(item);
+                    }
+                }
+            });
+
+            matches.sort((a, b) => {
+                const posA = lower.indexOf(a.root);
+                const posB = lower.indexOf(b.root);
+                if (posA !== posB) return posA - posB;
+                return b.root.length - a.root.length;
+            });
+
+            let filtered = [];
+            let occupied = new Array(lower.length).fill(false);
+            matches.forEach(m => {
+                const idx = lower.indexOf(m.root);
+                let canAdd = true;
+                for(let i = idx; i < idx + m.root.length; i++) {
+                    if(occupied[i]) canAdd = false;
+                }
+                if(canAdd) {
+                    filtered.push(m);
+                    for(let i = idx; i < idx + m.root.length; i++) {
+                        occupied[i] = true;
+                    }
+                }
+            });
+
+            if (filtered.length === 0) return { html: "无显着拉丁/希腊医学词根（或为基础英语词汇）", text: "基础词或无显着词根" };
+
+            const html = filtered.map(m => `<span class="bg-amber-100 text-amber-900 border border-amber-300 px-1.5 py-0.5 rounded inline-block font-semibold my-0.5 shadow-2xs">${m.root}- (<span class="text-amber-700">${m.meaning}</span>)</span>`).join(' <span class="text-amber-500 font-bold">➔</span> ');
+            const text = filtered.map(m => `${m.root}(${m.meaning})`).join(" -> ");
+            return { html, text };
+        }
+
+        window.addEventListener('DOMContentLoaded', () => {
+            renderParallelText(sampleMedicalText);
+            updateVocabUI();
+            initHorizontalResizer(); // 启动左右拖拽
+            initVerticalResizers();  // 启动上下拖拽
+            
+            document.getElementById('file-input').addEventListener('change', handleFileUpload);
+            
+            document.getElementById('speed-btn').addEventListener('click', (e) => {
+                isSlowSpeed = !isSlowSpeed;
+                e.target.innerText = isSlowSpeed ? "0.75x (慢速记忆)" : "1.0x (正常语速)";
+                e.target.className = isSlowSpeed 
+                    ? "bg-blue-500 hover:bg-blue-400 px-2 py-0.5 rounded text-xs font-semibold transition text-white" 
+                    : "bg-green-600 hover:bg-green-500 px-2 py-0.5 rounded text-xs font-semibold transition text-white";
+            });
+
+            document.getElementById('prev-page').addEventListener('click', () => {
+                if (pageNum <= 1) return;
+                pageNum--;
+                renderPage(pageNum);
+            });
+            document.getElementById('next-page').addEventListener('click', () => {
+                if (pageNum >= pdfDoc.numPages) return;
+                pageNum++;
+                renderPage(pageNum);
+            });
+        });
+
+        // --- 1. 左右分栏拖拽调整 ---
+        function initHorizontalResizer() {
+            const resizer = document.getElementById('resizer');
+            const leftPanel = document.getElementById('left-panel');
+            let isResizing = false;
+
+            resizer.addEventListener('mousedown', () => {
+                isResizing = true;
+                resizer.classList.add('resizing');
+                document.body.style.cursor = 'col-resize';
+                document.body.style.userSelect = 'none';
+            });
+
+            document.addEventListener('mousemove', (e) => {
+                if (!isResizing) return;
+                const containerWidth = document.querySelector('main').clientWidth;
+                let newLeftWidth = (e.clientX / containerWidth) * 100;
+                if (newLeftWidth < 20) newLeftWidth = 20;
+                if (newLeftWidth > 80) newLeftWidth = 80;
+                leftPanel.style.width = `${newLeftWidth}%`;
+            });
+
+            document.addEventListener('mouseup', () => {
+                if (isResizing) {
+                    isResizing = false;
+                    resizer.classList.remove('resizing');
+                    document.body.style.cursor = '';
+                    document.body.style.userSelect = '';
+                }
+            });
+        }
+
+        // --- 2. 右侧上下分栏自由拖拽调整 ---
+        function initVerticalResizers() {
+            const rightPanel = document.getElementById('right-panel');
+            const topEl = document.getElementById('right-top');
+            const midEl = document.getElementById('right-mid');
+            const botEl = document.getElementById('right-bot');
+            const resizerV1 = document.getElementById('resizer-v1');
+            const resizerV2 = document.getElementById('resizer-v2');
+
+            let isResizing1 = false;
+            let isResizing2 = false;
+            let startY = 0;
+            let startTopPct = 0;
+            let startMidPct = 0;
+            let startBotPct = 0;
+
+            resizerV1.addEventListener('mousedown', (e) => {
+                isResizing1 = true;
+                startY = e.clientY;
+                const totalH = rightPanel.clientHeight;
+                startTopPct = (topEl.clientHeight / totalH) * 100;
+                startMidPct = (midEl.clientHeight / totalH) * 100;
+                resizerV1.classList.add('resizing');
+                document.body.style.cursor = 'row-resize';
+                document.body.style.userSelect = 'none';
+            });
+
+            resizerV2.addEventListener('mousedown', (e) => {
+                isResizing2 = true;
+                startY = e.clientY;
+                const totalH = rightPanel.clientHeight;
+                startMidPct = (midEl.clientHeight / totalH) * 100;
+                startBotPct = (botEl.clientHeight / totalH) * 100;
+                resizerV2.classList.add('resizing');
+                document.body.style.cursor = 'row-resize';
+                document.body.style.userSelect = 'none';
+            });
+
+            document.addEventListener('mousemove', (e) => {
+                if (!isResizing1 && !isResizing2) return;
+                const totalH = rightPanel.clientHeight;
+                const deltaPct = ((e.clientY - startY) / totalH) * 100;
+
+                // 拖动第一条横线：同时增减【上部段落区】和【中部查词区】的高度
+                if (isResizing1) {
+                    const combined = startTopPct + startMidPct;
+                    let newTop = startTopPct + deltaPct;
+                    if (newTop < 15) newTop = 15;
+                    if (newTop > combined - 15) newTop = combined - 15;
+                    let newMid = combined - newTop;
+                    topEl.style.height = `${newTop}%`;
+                    midEl.style.height = `${newMid}%`;
+                }
+
+                // 拖动第二条横线：同时增减【中部查词区】和【下部生词本】的高度
+                if (isResizing2) {
+                    const combined = startMidPct + startBotPct;
+                    let newMid = startMidPct + deltaPct;
+                    if (newMid < 15) newMid = 15;
+                    if (newMid > combined - 15) newMid = combined - 15;
+                    let newBot = combined - newMid;
+                    midEl.style.height = `${newMid}%`;
+                    botEl.style.height = `${newBot}%`;
+                }
+            });
+
+            document.addEventListener('mouseup', () => {
+                if (isResizing1 || isResizing2) {
+                    isResizing1 = false;
+                    isResizing2 = false;
+                    resizerV1.classList.remove('resizing');
+                    resizerV2.classList.remove('resizing');
+                    document.body.style.cursor = '';
+                    document.body.style.userSelect = '';
+                }
+            });
+        }
+
+        function handleFileUpload(e) {
+            const file = e.target.files[0];
+            if (!file) return;
+            
+            document.getElementById('file-name').innerText = file.name;
+            document.getElementById('empty-state').classList.add('hidden');
+            document.getElementById('pdf-container').classList.remove('hidden');
+
+            const fileReader = new FileReader();
+            fileReader.onload = function() {
+                const typedarray = new Uint8Array(this.result);
+                pdfjsLib.getDocument(typedarray).promise.then(function(pdf) {
+                    pdfDoc = pdf;
+                    document.getElementById('page-num').innerText = `1 / ${pdf.numPages}`;
+                    document.getElementById('prev-page').disabled = false;
+                    document.getElementById('next-page').disabled = false;
+                    pageNum = 1;
+                    renderPage(pageNum);
+                });
+            };
+            fileReader.readAsArrayBuffer(file);
+        }
+
+        function renderPage(num) {
+            pdfDoc.getPage(num).then(function(page) {
+                const viewport = page.getViewport({scale: scale});
+                const canvas = document.getElementById('pdf-canvas');
+                const context = canvas.getContext('2d');
+                canvas.height = viewport.height;
+                canvas.width = viewport.width;
+
+                page.render({ canvasContext: context, viewport: viewport });
+
+                page.getTextContent().then(function(textContent) {
+                    let pageText = "";
+                    textContent.items.forEach(item => { pageText += item.str + " "; });
+                    renderParallelText(pageText);
+                });
+
+                document.getElementById('page-num').innerText = `${num} / ${pdfDoc.numPages}`;
+            });
+        }
+
+        function renderParallelText(text) {
+            const container = document.getElementById('parallel-content');
+            container.innerHTML = '';
+            const rawSentences = text.match(/[^.!?]+[.!?]+/g) || [text];
+            
+            currentSentences = [];
+
+            rawSentences.forEach((rawSentence) => {
+                const cleanSentence = rawSentence.trim().replace(/\s+/g, ' ');
+                if(!cleanSentence) return;
+                currentSentences.push(cleanSentence);
+            });
+
+            currentSentences.forEach((sentence, index) => {
+                const div = document.createElement('div');
+                div.className = "p-2.5 hover:bg-slate-50 border-l-2 border-transparent hover:border-blue-500 transition rounded";
+                
+                const words = sentence.split(' ');
+                const wordsHtml = words.map(word => {
+                    const cleanWord = word.replace(/[^a-zA-Z\-]/g, '');
+                    return `<span class="word-interactive cursor-pointer text-slate-800 font-medium" onclick="handleWordClick(event, '${cleanWord}')">${word}</span>`;
+                }).join(' ');
+
+                div.innerHTML = `
+                    <div class="mb-1 leading-normal text-base">${wordsHtml}</div>
+                    <div id="trans-${index}" class="text-xs text-slate-600 bg-amber-50 border border-amber-100 p-2 rounded hidden font-sans mt-1">正在呼叫中文翻译接口...</div>
+                    <div class="flex space-x-4 mt-2">
+                        <button onclick="translateSentence(${index})" class="text-xs text-blue-600 hover:underline flex items-center font-medium">🌐 显示/隐藏中文翻译</button>
+                        <button onclick="speakSentence(${index})" class="text-xs text-green-600 hover:underline flex items-center font-medium">🔊 朗读整句</button>
+                    </div>
+                `;
+                container.appendChild(div);
+            });
+        }
+
+        async function handleWordClick(event, word) {
+            event.stopPropagation();
+            if (!word) return;
+
+            speakText(word, true);
+            const rootsObj = analyzeMedicalRoots(word);
+
+            const panel = document.getElementById('word-panel');
+            panel.className = "flex-1 flex flex-col justify-between bg-yellow-50 border border-yellow-200 rounded-lg p-3 text-slate-800 min-h-[100px]";
+            panel.innerHTML = `
+                <div class="flex justify-between items-start border-b border-yellow-200 pb-2 mb-1.5 shrink-0">
+                    <div>
+                        <span class="text-xl font-bold text-slate-900">${word}</span>
+                        <span id="word-ipa" class="text-sm font-mono text-slate-500 ml-2">正在同步获取音标...</span>
+                    </div>
+                    <button onclick="speakText('${word}', true)" class="bg-yellow-400 hover:bg-yellow-300 text-yellow-900 text-xs px-2.5 py-1 rounded font-semibold flex items-center shadow-2xs">🔊 慢速发音</button>
+                </div>
+                <div class="space-y-2 overflow-y-auto flex-1 pr-1 text-xs leading-relaxed my-1">
+                    <div class="flex items-baseline bg-amber-50/80 p-1.5 rounded border border-amber-200/60">
+                        <span class="font-bold text-amber-800 shrink-0 text-xs">【词根】</span>
+                        <span class="ml-2 leading-normal text-xs">${rootsObj.html}</span>
+                    </div>
+                    <div class="flex items-baseline pt-0.5">
+                        <span class="font-bold text-slate-500 shrink-0 text-xs">【中文】</span>
+                        <span id="word-def-cn" class="font-bold text-blue-700 ml-2 text-sm">正在同步获取谷歌汉化...</span>
+                    </div>
+                    <div class="flex items-baseline pt-0.5">
+                        <span class="font-bold text-slate-500 shrink-0 text-xs">【英文】</span>
+                        <span id="word-def-en" class="text-slate-700 ml-2 text-xs">正在同步原版词典定义...</span>
+                    </div>
+                </div>
+                <div class="flex justify-end pt-2 mt-1 border-t border-yellow-200 shrink-0">
+                    <button onclick="addToVocab('${word}')" class="text-xs bg-slate-800 hover:bg-slate-700 text-white px-3 py-1 rounded flex items-center shadow-2xs font-medium">+ 加入生词记忆本</button>
+                </div>
+            `;
+
+            let chineseDef = "中文翻译超时或暂无";
+            let englishDef = "专业医学合成词，词典暂无简明英释";
+            let phonetic = "/ - /";
+
+            try {
+                const transUrl = `https://translate.googleapis.com/translate_a/single?client=gtx&sl=en&tl=zh-CN&dt=t&dt=bd&q=${encodeURIComponent(word)}`;
+                const transRes = await fetch(transUrl);
+                if (transRes.ok) {
+                    const transData = await transRes.json();
+                    chineseDef = transData[0].map(item => item[0]).join('');
+                    if (transData[1] && transData[1].length > 0) {
+                        const detailed = transData[1].map(pos => `${pos[0]}: ${pos[1].slice(0, 3).join(', ')}`).join('； ');
+                        if (detailed) chineseDef = detailed;
+                    }
+                }
+            } catch (e) {}
+
+            try {
+                const dictRes = await fetch(`https://api.dictionaryapi.dev/api/v2/entries/en/${word}`);
+                if (dictRes.ok) {
+                    const dictData = await dictRes.json();
+                    phonetic = dictData[0].phonetics.find(p => p.text)?.text || dictData[0].phonetic || "/ - /";
+                    englishDef = dictData[0].meanings[0]?.definitions[0]?.definition || "暂无英文原版简明定义";
+                }
+            } catch (e) {}
+
+            document.getElementById('word-ipa').innerText = phonetic;
+            document.getElementById('word-def-cn').innerText = chineseDef;
+            document.getElementById('word-def-en').innerText = englishDef;
+            panel.dataset.ipa = phonetic;
+            panel.dataset.defCn = chineseDef;
+            panel.dataset.defEn = englishDef;
+            panel.dataset.roots = rootsObj.text;
+        }
+
+        async function translateSentence(index) {
+            const transDiv = document.getElementById(`trans-${index}`);
+            if (!transDiv.classList.contains('hidden')) {
+                transDiv.classList.add('hidden');
+                return;
+            }
+            transDiv.classList.remove('hidden');
+
+            if (transDiv.dataset.translated === "true") return;
+
+            try {
+                const text = currentSentences[index];
+                const url = `https://translate.googleapis.com/translate_a/single?client=gtx&sl=en&tl=zh-CN&dt=t&q=${encodeURIComponent(text)}`;
+                const res = await fetch(url);
+                const data = await res.json();
+                const translation = data[0].map(item => item[0]).join('');
+                transDiv.innerText = translation;
+                transDiv.dataset.translated = "true";
+            } catch (e) {
+                transDiv.innerText = "翻译请求失败，请检查网络是否畅通。";
+            }
+        }
+
+        function speakSentence(index) {
+            if (currentSentences[index]) {
+                speakText(currentSentences[index], false);
+            }
+        }
+
+        function speakText(text, forceSlow = false) {
+            if (!('speechSynthesis' in window)) {
+                alert("您当前的浏览器不支持语音合成，请使用 Chrome 或 Edge 浏览器。");
+                return;
+            }
+            window.speechSynthesis.cancel();
+            
+            const utterance = new SpeechSynthesisUtterance(text);
+            utterance.lang = 'en-US';
+            utterance.rate = (forceSlow && isSlowSpeed) ? 0.75 : (isSlowSpeed ? 0.75 : 1.0);
+            
+            const voices = window.speechSynthesis.getVoices();
+            const naturalVoice = voices.find(v => v.lang.includes('en') && (v.name.includes('Natural') || v.name.includes('Samantha') || v.name.includes('Zira')));
+            if (naturalVoice) utterance.voice = naturalVoice;
+
+            window.speechSynthesis.speak(utterance);
+        }
+
+        function addToVocab(word) {
+            const panel = document.getElementById('word-panel');
+            const ipa = panel.dataset.ipa || "";
+            const defCn = panel.dataset.defCn || "自行翻译";
+            const defEn = panel.dataset.defEn || "暂无英文定义";
+            const roots = panel.dataset.roots || "无显着词根";
+
+            if (!vocabList.some(item => item.word === word)) {
+                vocabList.unshift({ word, ipa, defCn, defEn, roots, time: new Date().toLocaleDateString() });
+                localStorage.setItem('medical_vocab', JSON.stringify(vocabList));
+                updateVocabUI();
+            }
+        }
+
+        function removeVocab(word) {
+            vocabList = vocabList.filter(item => item.word !== word);
+            localStorage.setItem('medical_vocab', JSON.stringify(vocabList));
+            updateVocabUI();
+        }
+
+        function updateVocabUI() {
+            document.getElementById('vocab-count').innerText = vocabList.length;
+            const list = document.getElementById('vocab-list');
+            list.innerHTML = '';
+            
+            vocabList.forEach(item => {
+                const cn = item.defCn || item.def || "无";
+                const roots = item.roots || "基础词";
+                
+                const div = document.createElement('div');
+                div.className = "flex justify-between items-center bg-slate-50 p-2 rounded text-xs border border-slate-100 hover:border-slate-300 transition";
+                div.innerHTML = `
+                    <div class="flex items-center space-x-2 overflow-hidden flex-1 mr-2">
+                        <button onclick="speakText('${item.word}', true)" class="text-blue-500 hover:text-blue-700 font-bold shrink-0 text-sm">🔊</button>
+                        <span class="font-bold text-slate-800 shrink-0 text-sm">${item.word}</span>
+                        <span class="text-[11px] text-slate-400 font-mono shrink-0">${item.ipa}</span>
+                        <span class="text-amber-800 bg-amber-100/80 px-1.5 py-0.5 rounded text-[10px] shrink-0 font-medium">[根] ${roots}</span>
+                        <span class="text-blue-700 font-medium truncate shrink-0 ml-1 text-xs">[中] ${cn}</span>
+                    </div>
+                    <button onclick="removeVocab('${item.word}')" class="text-slate-400 hover:text-red-500 shrink-0 text-base font-bold px-1">×</button>
+                `;
+                list.appendChild(div);
+            });
+        }
+
+        function exportVocab() {
+            if (vocabList.length === 0) {
+                alert("生词本为空，请先在阅读中采集词汇。");
+                return;
+            }
+            let csvContent = "data:text/csv;charset=utf-8,\uFEFF单词,音标,词根拆解,中文释义,英文原版释义,收录时间\n";
+            vocabList.forEach(item => {
+                const cn = (item.defCn || item.def || "").replace(/"/g, '""');
+                const en = (item.defEn || "").replace(/"/g, '""');
+                const roots = (item.roots || "").replace(/"/g, '""');
+                csvContent += `"${item.word}","${item.ipa}","${roots}","${cn}","${en}","${item.time}"\n`;
+            });
+            const encodedUri = encodeURI(csvContent);
+            const link = document.createElement("a");
+            link.setAttribute("href", encodedUri);
+            link.setAttribute("download", `医学生词构词双语本_${new Date().toISOString().slice(0,10)}.csv`);
+            document.body.appendChild(link);
+            link.click();
+            document.body.removeChild(link);
+        }
+    </script>
+</body>
+</html>

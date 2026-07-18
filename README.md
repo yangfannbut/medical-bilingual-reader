@@ -38,7 +38,7 @@
 
 ### 方式一：直接使用在线网页（推荐）
 点击访问 GitHub Pages 部署的在线演示链接：  
-👉 **[在线阅读器地址 https://<你的用户名>.github.io/medical-bilingual-reader/](https://<你的用户名>.github.io/medical-bilingual-reader/)**
+👉 **[在线阅读器地址 https://yangfannbut.github.io/medical-bilingual-reader/](https://yangfannbut.github.io/medical-bilingual-reader/)**
 
 ### 方式二：电脑本地离线运行
 1. 点击项目主页绿色的 `Code` 按钮，选择 `Download ZIP` 下载全部文件。
